@@ -1,0 +1,5 @@
+modules:
+  mod_push_notification: 
+    multi_token: true
+    ##push_url: "https://pushtriplechat.azurewebsites.net/api/SendPushNotification"
+    push_url: "http://127.0.0.1:8082/api/PushNotification/send"
