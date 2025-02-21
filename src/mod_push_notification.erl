@@ -21,7 +21,7 @@ start(Host, _Opts) ->
     ok.
 
 stop(Host) ->
-    ?INFO_MSG("Stopping mod_push_notification for host ~s", [Host]),
+    ?INFO_MSG("Stopping mod_push_notification V2 for host ~s", [Host]),
     ejabberd_hooks:delete(filter_packet, global, ?MODULE, on_filter_packet, 50),
     ok.
 
