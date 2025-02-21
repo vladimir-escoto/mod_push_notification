@@ -16,7 +16,7 @@
 -define(DEFAULT_PUSH_URL, "https://pushtriplechat.azurewebsites.net/api/SendPushNotification").
 
 start(Host, _Opts) ->
-    ?INFO_MSG("Starting mod_push_notification v1 for host ~s", [Host]),
+    ?INFO_MSG("Starting mod_push_notification v2 for host ~s", [Host]),
     ejabberd_hooks:add(filter_packet, global, ?MODULE, on_filter_packet, 50),
     ok.
 
@@ -76,6 +76,7 @@ process_push_notification(Node, XDataFields, Fields) ->
     % Extraer campos específicos
     NotificationType = find_field_value(<<"notification-type">>, Fields),
     Platform = find_field_value(<<"pushModule">>, Fields),
+    Environment = find_field_value(<<"environment">>, Fields),
     
     % Extraer campos de XDataFields
     Title = find_field_value(<<"last-message-sender">>, XDataFields),
@@ -104,7 +105,8 @@ process_push_notification(Node, XDataFields, Fields) ->
         {<<"body">>, Body},
         {<<"data">>, {DataFields}},
         {<<"type">>, NotificationType},
-        {<<"platform">>, Platform}
+        {<<"platform">>, Platform},
+        {<<"environment">>, Environment}
     ]}),
    
     Headers = [
