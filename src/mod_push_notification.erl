@@ -16,7 +16,7 @@
 -define(DEFAULT_PUSH_URL, "https://pushtriplechat.azurewebsites.net/api/SendPushNotification").
 
 start(Host, _Opts) ->
-    ?INFO_MSG("Starting mod_push_notification for host ~s", [Host]),
+    ?INFO_MSG("Starting mod_push_notification v1 for host ~s", [Host]),
     ejabberd_hooks:add(filter_packet, global, ?MODULE, on_filter_packet, 50),
     ok.
 
