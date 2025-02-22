@@ -509,11 +509,10 @@ notify(LUser, LServer, Clients, Pkt, Dir) ->
 				(error, {StatusCode, ResponseBody}) ->
 					%% Si el error no es temporal, se elimina la sesión
 					spawn(?MODULE, delete_session, [LUser, LServer, ID]),
-					?WARNING_MSG("Notification for ~ts@~ts (~ts) failed with error: ~p (status ~p)",
-								 [jid:encode(PushLJID), LUser, Node, ResponseBody, StatusCode]);
-				(timeout, Reason) ->
-					?WARNING_MSG("Timeout sending notification for ~ts@~ts (~ts): ~p",
-							  [LUser, LServer, Node, Reason])
+					?WARNING_MSG("Disabling push notifications for ~ts@~ts",[LUser,LServer]),					
+					?WARNING_MSG("Failed sending Notification for ~ts@~ts (status: ~p)~n ~p",[LUser,LServer, StatusCode, ResponseBody]);
+				(timeout, _Reason) ->
+					?WARNING_MSG("Timeout sending notification for ~ts@~ts",[LUser, LServer])
 			end,
 			notify(LServer, PushLJID, Node, XData, Pkt, Dir, FailureCallback)
 		end, Clients).
@@ -609,12 +608,12 @@ process_push_notification(PushServer,Node, Fields,FailureCallback) ->
 	]}),
 	   
 	% Configurar URL y headers
-	PushURL = <<PushServer/binary, "/api/PushNotification/send">>,
+	PushURL = <<"https://",PushServer/binary, "/api/PushNotification/send">>,
 	Headers = [{"Content-Type", "application/json"}],
 		
 	?INFO_MSG("Sending Push notification to ~s:~n ~p", [PushURL, Payload]),
 
-    Response = httpc:request(post, {binary_to_list(PushURL), Headers, "application/json", Payload}, [], []),
+    Response = httpc:request(post, {binary_to_list(PushURL), Headers, "application/json", Payload}, [{timeout, 600}], []),
     
 	case Response of
         {ok, {{_, 200, _}, _, _ResponseBody}} ->
