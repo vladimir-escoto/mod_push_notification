@@ -350,19 +350,16 @@ enable(#jid{luser = LUser, lserver = LServer, lresource = LResource} = JID,
 	{ID, PID} ->
 	    case store_session(LUser, LServer, ID, PushJID, Node, XData) of
 		{ok, _} ->
-		    ?INFO_MSG("Enabling push notifications Server: ~ts JID: ~ts ~nToken: ~ts",
+		    ?INFO_MSG("Enabling push notifications Server: ~ts JID: ~ts ~n				 Token: ~ts",
 			      [jid:encode(PushJID),jid:encode(JID),Node]),
 		    ejabberd_c2s:cast(PID, {push_enable, ID}),
-		    ejabberd_sm:set_user_info(LUser, LServer, LResource,
-					      push_id, ID);
+		    ejabberd_sm:set_user_info(LUser, LServer, LResource,push_id, ID);
 		{error, _} = Err ->
-		    ?ERROR_MSG("Cannot enable push for ~ts: database error",
-			       [jid:encode(JID)]),
+		    ?ERROR_MSG("Cannot enable push for ~ts: database error", [jid:encode(JID)]),
 		    Err
 	    end;
 	none ->
-	    ?WARNING_MSG("Cannot enable push for ~ts: session not found",
-			 [jid:encode(JID)]),
+	    ?WARNING_MSG("Cannot enable push for ~ts: session not found", [jid:encode(JID)]),
 	    {error, notfound}
     end.
 
@@ -500,29 +497,72 @@ notify(#{jid := #jid{luser = LUser, lserver = LServer}} = State, Pkt, Dir) ->
     end.
 
 -spec notify(binary(), binary(), [push_session()],
-	     xmpp_element() | xmlel() | none, direction()) -> ok.
+             xmpp_element() | xmlel() | none, direction()) -> ok.
 notify(LUser, LServer, Clients, Pkt, Dir) ->
-	lists:foreach(
-		fun({ID, PushLJID, Node, XData}) ->
-			%% Definir un callback simplificado que solo se activa en caso de fallo.
-			FailureCallback = fun
-				(error, {StatusCode, ResponseBody}) ->
-					%% Si el error no es temporal, se elimina la sesión
-					spawn(?MODULE, delete_session, [LUser, LServer, ID]),
-					?WARNING_MSG("Disabling push notifications for ~ts@~ts",[LUser,LServer]),					
-					?WARNING_MSG("Failed sending Notification for ~ts@~ts (status: ~p)~n ~p",[LUser,LServer, StatusCode, ResponseBody]);
-				(timeout, _Reason) ->
-					?WARNING_MSG("Timeout sending notification for ~ts@~ts",[LUser, LServer])
-			end,
-			notify(LServer, PushLJID, Node, XData, Pkt, Dir, FailureCallback)
-		end, Clients).
+	[spawn(fun() ->
+        try
+            {ID, PushLJID, Node, XData} = Client,
+            FailureCallback = fun
+                (error, {StatusCode, _ResponseBody}) ->
+                    %% Remove session directly (no extra spawn)
+                    ?MODULE:delete_session(LUser, LServer, ID),
+                    ?WARNING_MSG("Failed sending Push, disabled push for ~ts@~ts (Status: ~p)",
+                                 [LUser, LServer, StatusCode]);
+                (timeout, _) ->
+                    ?WARNING_MSG("Timeout sending Push for ~ts@~ts", [LUser, LServer])
+            end,
+            notify(LServer, PushLJID, Node, XData, Pkt, Dir, FailureCallback)
+        catch
+            error:{badmatch, _} ->
+                ?ERROR_MSG("Invalid client data: ~p", [Client]);
+            _:Error ->
+                ?ERROR_MSG("Unexpected error: ~p", [Error])
+        end
+    end) || Client <- Clients],
+    ok.
+	% [push_pool:async_job(
+    %     fun() ->
+    %         try
+    %             {ID, PushLJID, Node, XData} = Client,
+	% 			FailureCallback = fun
+	% 				(error, {StatusCode, _ResponseBody}) ->
+	% 					%% Eliminar sesión directamente (sin spawn extra)
+	% 					?MODULE:delete_session(LUser, LServer, ID),
+	% 					?WARNING_MSG("Failed sending Push, disabled push for ~ts@~ts (Status: ~p)",
+	% 								[LUser, LServer, StatusCode]);
+	% 				(timeout, _) ->
+	% 					?WARNING_MSG("Timeout sending Push for ~ts@~ts", [LUser, LServer])
+	% 			end,
+	% 			notify(LServer, PushLJID, Node, XData, Pkt, Dir, FailureCallback)
+    %         catch
+    %             error:{badmatch, _} -> 
+    %                 ?ERROR_MSG("Invalid client data: ~p", [Client]);
+    %             _:Error ->
+    %                 ?ERROR_MSG("Unexpected error: ~p", [Error])
+    %         end
+    %     end) || Client <- Clients],
+    % ok.
+
+	% lists:foreach(
+	% 	fun({ID, PushLJID, Node, XData}) ->
+	% 		%% Definir un callback simplificado que solo se activa en caso de fallo.
+	% 		FailureCallback = fun
+	% 			(error, {StatusCode, ResponseBody}) ->
+	% 				%% Si el error no es temporal, se elimina la sesión
+	% 				spawn(?MODULE, delete_session, [LUser, LServer, ID]),
+	% 				?WARNING_MSG("Disabling push notifications for ~ts@~ts",[LUser,LServer]),					
+	% 				?WARNING_MSG("Failed sending Notification for ~ts@~ts (status: ~p)~n ~p",[LUser,LServer, StatusCode, ResponseBody]);
+	% 			(timeout, _Reason) ->
+	% 				?WARNING_MSG("Timeout sending notification for ~ts@~ts",[LUser, LServer])
+	% 		end,
+	% 		notify(LServer, PushLJID, Node, XData, Pkt, Dir, FailureCallback)
+	% 	end, Clients).
 
 -spec notify(binary(), ljid(), binary(), xdata(), 
              xmpp_element() | xmlel() | none, direction(),
              fun((iq() | timeout) -> any())) -> ok.
 notify(LServer, PushLJID, Node, XData, Pkt0, Dir, FailureCallback) ->
     Pkt = unwrap_message(Pkt0),
-    _From  = jid:make(LServer),
     case {make_summary(LServer, Pkt, Dir), mod_push_opt:notify_on(LServer)} of
         {undefined, messages} ->
             ?DEBUG("Suppressing notification for stanza without payload", []),
@@ -545,8 +585,10 @@ notify(LServer, PushLJID, Node, XData, Pkt0, Dir, FailureCallback) ->
 				#xdata{fields = Fields} -> Fields;
 				_ -> []
 			end,
+			#message{id = MsgId} = Pkt,
             % Crear nuevos campos para añadir a XData_Fields
             NewFields = [
+				#xdata_field{type = 'text-single', var = <<"message-id">>, values = [ensure_binary(MsgId)]},
                 #xdata_field{type = 'text-single', var = <<"notification-type">>, values = [ensure_binary(NotificationType)]},
                 #xdata_field{type = 'text-single', var = <<"propose-id">>, values = [ensure_binary(ProposeID)]},
                 #xdata_field{type = 'text-single', var = <<"propose-media">>, values = [ensure_binary(ProposeMedia)]}
@@ -569,7 +611,7 @@ notify(LServer, PushLJID, Node, XData, Pkt0, Dir, FailureCallback) ->
                                 notify_failure_callback()) -> ok.
 process_push_notification(PushServer,Node, Fields,FailureCallback) ->
 	% Campos específicos que extraemos primero
-	SpecificKeys = [<<"FORM_TYPE">>,<<"notification-type">>, <<"pushModule">>],
+	SpecificKeys = [<<"FORM_TYPE">>,<<"notification-type">>, <<"pushModule">>, <<"environment">>],
 		
 	% Extraer campos específicos
 	NotificationType = find_field_value(<<"notification-type">>, Fields),
@@ -608,22 +650,41 @@ process_push_notification(PushServer,Node, Fields,FailureCallback) ->
 	]}),
 	   
 	% Configurar URL y headers
-	PushURL = <<"https://",PushServer/binary, "/api/PushNotification/send">>,
+	PushURL = <<"https://", PushServer/binary, "/api/PushNotification/send">>,
 	Headers = [{"Content-Type", "application/json"}],
 		
-	?INFO_MSG("Sending Push notification to ~s:~n ~p", [PushURL, Payload]),
+	?INFO_MSG("Sending Push notification to ~s: ~p", [PushURL, Payload]),
 
-    Response = httpc:request(post, {binary_to_list(PushURL), Headers, "application/json", Payload}, [{timeout, 600}], []),
+  	%% Use asynchronous HTTP request so as not to block the worker
+	Options = [{sync, false}, {receiver, self()}],
+	case httpc:request(post, {binary_to_list(PushURL), Headers, "application/json", Payload}, [{timeout, 300}],Options) of
+	  {ok, ReqId} ->
+		  receive
+			  {http, {ReqId, {ok, {{_, 200, _}, _, _ResponseBody}}}} ->
+				  ?INFO_MSG("Push notification forwarded successfully.", []),
+				  ok;
+			  {http, {ReqId, {ok, {{_, StatusCode, _}, _, ResponseBody}}}} ->
+				  FailureCallback(error, {StatusCode, ResponseBody});
+			  {http, {ReqId, {error, _Reason}}} ->
+				%   FailureCallback(timeout, Reason)
+				?WARNING_MSG("Timeout sending Push", [])
+		  end;
+	  {error, Reason} ->
+		  ?WARNING_MSG("Error sending notification",[Reason]),
+	   ok
+	end.
+
+    % Response = httpc:request(post, {binary_to_list(PushURL), Headers, "application/json", Payload}, [{timeout, 600}], []),
     
-	case Response of
-        {ok, {{_, 200, _}, _, _ResponseBody}} ->
-            ?INFO_MSG("Push notification forwarded successfully.", []),
-            ok;
-        {ok, {{_, StatusCode, _}, _, ResponseBody}} ->
-            FailureCallback(error, {StatusCode, ResponseBody});
-        {error, Reason} ->
-            FailureCallback(timeout, Reason)
-    end.
+	% case Response of
+    %     {ok, {{_, 200, _}, _, _ResponseBody}} ->
+    %         ?INFO_MSG("Push notification forwarded successfully.", []),
+    %         ok;
+    %     {ok, {{_, StatusCode, _}, _, ResponseBody}} ->
+    %         FailureCallback(error, {StatusCode, ResponseBody});
+    %     {error, Reason} ->
+    %         FailureCallback(timeout, Reason)
+    % end.
 	
 %% Para buscar campos en XDATA
 find_field_value(Var, Fields) ->
